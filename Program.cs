@@ -126,13 +126,6 @@ namespace isci.integration
         {
             var konfiguration = new Konfiguration(args);
 
-            var ausfuehrungsmodell = new Ausführungsmodell(konfiguration);
-            if (ausfuehrungsmodell.Count() == 0)
-            {
-                Console.WriteLine("Kein Eintrag im Ausführungsmodell");
-                System.Environment.Exit(-1);
-            }
-
             var service = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024);
             service.AddProperty("Ressource", konfiguration.Ressource);
             service.AddProperty("Modul", "isci.integration");
@@ -141,17 +134,12 @@ namespace isci.integration
             sd.Advertise(service);
 
             structure = new Datenstruktur(konfiguration);
+            var ausfuehrungsmodell = new Ausführungsmodell(konfiguration, structure.Zustand);
 
-            var dm = new Datenmodell(konfiguration);
-            var cycle = new dtInt32(0, "cycle");
-            dm.Dateneinträge.Add(cycle);
-
-            var beschreibung = new Modul(konfiguration.Identifikation, "isci.integration", new ListeDateneintraege(){cycle});
+            var beschreibung = new Modul(konfiguration.Identifikation, "isci.integration");
             beschreibung.Name = "Integration Ressource " + konfiguration.Identifikation;
             beschreibung.Beschreibung = "Modul zur Integration";
             beschreibung.Speichern(konfiguration.OrdnerBeschreibungen + "/" + konfiguration.Identifikation + ".json");
-
-            dm.Speichern(konfiguration.OrdnerDatenmodelle + "/" + konfiguration.Identifikation + ".json");
 
             var ip = holeLokaleAdresse(konfiguration.Adapter);
             while (ip.Equals(new IPAddress(0)))
@@ -163,7 +151,6 @@ namespace isci.integration
             var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + ". " + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.Ressource);
             schnittstelle.Speichern(konfiguration.OrdnerSchnittstellen + "/" + schnittstelle.Identifikation + ".json");
 
-            structure.DatenmodellEinhängen(dm);
             structure.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
 
             using (SHA256 sha256Hash = SHA256.Create())
@@ -184,9 +171,6 @@ namespace isci.integration
 
             structure.Start();
 
-            var Zustand = new dtInt32(0, "Zustand", konfiguration.OrdnerDatenstrukturen + "/" + konfiguration.Anwendung + "/Zustand");
-            Zustand.Start();
-
             for (int i = 0; i < konfiguration.Targets.Length; ++i)
             {
                 try
@@ -205,30 +189,25 @@ namespace isci.integration
             byte[] puffer = new byte[1024];
             int pos = 0;
             
+            
             while(true)
             {
-                Zustand.Lesen();
-                
-                if (ausfuehrungsmodell.ContainsKey((UInt32)Zustand.value))
+                structure.Zustand.WertAusSpeicherLesen();
+
+                if (ausfuehrungsmodell.AktuellerZustandModulAktivieren())
                 {
-                    var schritt_param = (string)ausfuehrungsmodell[(UInt32)Zustand.value].Parametrierung;
+                    var schritt_param = ausfuehrungsmodell.ParameterAktuellerZustand();
                     
                     switch (schritt_param)
                     {
                         case "E":
                         {
-                            var curr_ticks_new = System.DateTime.Now.Ticks;
-                            var ticks_span = curr_ticks_new - curr_ticks;
-                            curr_ticks = curr_ticks_new;
-                            cycle.value = (System.Int32)(ticks_span / System.TimeSpan.TicksPerMillisecond);
-                            cycle.Schreiben();
-
                             change_lock = true;
                             foreach (var aenderung in aenderungen)
                             {
                                 try {
-                                    aenderung.Key.AusBytes(aenderung.Value);
-                                    aenderung.Key.Schreiben();
+                                    aenderung.Key.WertAusBytes(aenderung.Value);
+                                    aenderung.Key.WertInSpeicherSchreiben();
                                 } catch {
 
                                 }
@@ -245,7 +224,6 @@ namespace isci.integration
                             foreach (var entry in updated)
                             {
                                 var eintrag_ = structure.dateneinträge[entry];
-                                if (eintrag_.Identifikation == "ns=integration;cycle") continue;
 
                                 var address_ = BitConverter.GetBytes(eintragKartierung[eintrag_]);
                                 byte[] value_ = null;
@@ -256,7 +234,7 @@ namespace isci.integration
                                 {
                                     case Datentypen.String: 
                                     case Datentypen.Objekt: {
-                                        var value_content = System.Text.Encoding.UTF8.GetBytes((String)eintrag_.Serialisieren());
+                                        var value_content = System.Text.Encoding.UTF8.GetBytes((String)eintrag_.WertSerialisieren());
                                         var value_length = BitConverter.GetBytes((UInt16)value_content.Length); //auf zwei Bytes normieren!!! maximale länge dann 65535
                                         var value_length_container = new byte[2];
                                         Array.Copy(value_length, value_length_container, value_length_container.Length);
@@ -265,7 +243,7 @@ namespace isci.integration
                                         Array.Copy(value_content, 0, value_, value_length_container.Length, value_content.Length);
                                         break;
                                     }
-                                    case Datentypen.Bool: value_ = BitConverter.GetBytes((bool)eintrag_.value); break;
+                                    case Datentypen.Bool: value_ = BitConverter.GetBytes((bool)eintrag_.Wert); break;
                                 }
 
                                 if (value_ != null)
@@ -289,8 +267,8 @@ namespace isci.integration
                         }
                     }
 
-                    Zustand.value = ((UInt32)Zustand.value)+1;
-                    Zustand.Schreiben();
+                    structure.Zustand++;
+                    structure.Zustand.WertInSpeicherSchreiben();
                 }
             }
         }

@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\isci\isci.csproj" />
+    <ProjectReference Include="../isci/isci.csproj" />
   </ItemGroup>
 
   <ItemGroup>
