@@ -14,8 +14,11 @@ namespace isci.integration
 {
     public class Konfiguration : isci.Allgemein.Parameter
     {
+        [fromArgs, fromEnv]
         public string[] Targets;
+        [fromArgs, fromEnv]
         public string Adapter;
+        [fromArgs, fromEnv]
         public int Port;
 
         public Konfiguration(string[] args) : base(args)
@@ -148,7 +151,7 @@ namespace isci.integration
                 ip = holeLokaleAdresse(konfiguration.Adapter);
             }
             
-            var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + ". " + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.Ressource);
+            var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + "." + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.Ressource);
             schnittstelle.Speichern(konfiguration.OrdnerSchnittstellen + "/" + schnittstelle.Identifikation + ".json");
 
             structure.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
@@ -267,7 +270,7 @@ namespace isci.integration
                         }
                     }
 
-                    structure.Zustand++;
+                    ausfuehrungsmodell.Folgezustand();
                     structure.Zustand.WertInSpeicherSchreiben();
                 }
             }
