@@ -27,7 +27,7 @@ namespace isci.integration
     class Program
     {
         static Socket udpSock;
-        static byte[] buffer = new byte[1024];
+        static byte[] buffer;
         static Dictionary<Dateneintrag, byte[]> aenderungen = new Dictionary<Dateneintrag, byte[]>();
 
         static void udpStart(IPAddress ip, int port){
@@ -43,7 +43,16 @@ namespace isci.integration
                 EndPoint client = new IPEndPoint(IPAddress.Any, 0);
                 int length = recvSock.EndReceiveFrom(asyncResult, ref client);
 
+                //buffer für weiterverarbeitung zwischenspeichern, und gleich wieder in beginreceivefrom, um nichts zu verpassen?
+
                 //hier change lock machen?
+
+                if (enc != null)
+                {
+                    var tmp = enc.Decrypt(buffer);
+                    Array.Copy(tmp, buffer, tmp.Length);
+                    length = tmp.Length;
+                }
 
                 var pos_ = 0;
 
@@ -122,9 +131,27 @@ namespace isci.integration
             { Datentypen.Double, sizeof(double) }
         };
 
+        static isci.Daten.UdpPacketEncryption enc = null;
+
         static void Main(string[] args)
         {
             var konfiguration = new Konfiguration(args);
+
+            if (System.IO.File.Exists(konfiguration.OrdnerBeschreibungen + "/anwendungsschluessel"))
+            {
+                try {
+                    enc = new isci.Daten.UdpPacketEncryption(konfiguration.OrdnerBeschreibungen + "/anwendungsschluessel");
+                } catch {
+
+                }                
+            }
+
+            if (enc == null)
+            {
+                buffer = new byte[1024];
+            } else {
+                buffer = new byte[1300]; //genaue länge noch verifizieren? kleinstmöglich --> performancevorteil?
+            }
 
             var service = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024);
             service.AddProperty("Ressource", konfiguration.Ressource);
@@ -184,11 +211,9 @@ namespace isci.integration
             }
 
             udpStart(ip, konfiguration.Port);
-            long curr_ticks = 0;
 
             byte[] puffer = new byte[1024];
-            int pos = 0;
-            
+            int pos = 0;            
             
             while(true)
             {
@@ -257,9 +282,20 @@ namespace isci.integration
 
                             if (pos > 0)
                             {
-                                foreach (var target in targets) {
-                                    udpSock.BeginSendTo(puffer, 0, pos, 0, target, null, null);
+                                if (enc != null)
+                                {
+                                    var conv = enc.Encrypt(puffer, pos);
+                                    foreach (var target in targets)
+                                    {
+                                        udpSock.BeginSendTo(conv, 0, conv.Length, 0, target, null, null);
+                                    }
+                                } else {
+                                    foreach (var target in targets)
+                                    {
+                                        udpSock.BeginSendTo(puffer, 0, pos, 0, target, null, null);
+                                    }
                                 }
+                                
                                 Array.Clear(puffer, 0, pos);
                                 pos = 0;
                             }
