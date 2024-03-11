@@ -20,80 +20,89 @@ namespace isci.integration
         public string Adapter;
         [fromArgs, fromEnv]
         public int Port;
+        [fromArgs, fromEnv]
+        public int eingangPufferGroesseInBytes;
+        [fromArgs, fromEnv]
+        public int ausgangPufferGroesseInBytes;
 
         public Konfiguration(string[] args) : base(args)
         {
-            
+            if (eingangPufferGroesseInBytes <= 1024) eingangPufferGroesseInBytes = 1024;
+            if (ausgangPufferGroesseInBytes <= 1024) ausgangPufferGroesseInBytes = 1024;            
         }
     }
 
     class Program
     {
         static Socket udpSock;
-        static byte[] buffer = new byte[1024];
-        static Dictionary<Dateneintrag, byte[]> aenderungen = new Dictionary<Dateneintrag, byte[]>();
+        static byte[] eingangPuffer;
+        static readonly Dictionary<Dateneintrag, byte[]> eingegangeneAenderungen = [];
 
-        static void udpStart(IPAddress ip, int port){
+        static void UdpStart(IPAddress ip, int port){
             udpSock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             udpSock.Bind(new IPEndPoint(ip, port));
-            udpSock.BeginReceive(buffer, 0, buffer.Length, socketFlags:SocketFlags.None, udpCallback, udpSock);
+            udpSock.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags:SocketFlags.None, UdpCallback, udpSock);
         }       
 
-        static void udpCallback(IAsyncResult asyncResult){
+        static void UdpCallback(IAsyncResult asyncResult){
             try
             {
-                Socket recvSock = (Socket)asyncResult.AsyncState;
-                EndPoint client = new IPEndPoint(IPAddress.Any, 0);
-                int length = recvSock.EndReceiveFrom(asyncResult, ref client);
+                var recvSock = (Socket)asyncResult.AsyncState;
+                //EndPoint client = new IPEndPoint(IPAddress.Any, 0);
+                //int length = recvSock.EndReceiveFrom(asyncResult, ref client);
+                var zahlEmpfangeneBytes = recvSock.EndReceive(asyncResult);
 
                 //hier change lock machen?
 
-                var pos_ = 0;
+                var eingangPufferPosition = 0;
 
-                while(pos_ < length)
+                while(eingangPufferPosition < zahlEmpfangeneBytes)
                 {
                     var adresse_ = new byte[8];
-                    Array.Copy(buffer, pos_, adresse_, 0, adresse_.Length);
-                    pos_ += adresse_.Length;
+                    Array.Copy(eingangPuffer, eingangPufferPosition, adresse_, 0, adresse_.Length);
+                    eingangPufferPosition += adresse_.Length;
 
                     var adresse_u = BitConverter.ToUInt64(adresse_, 0);
                     var eintrag_ = adressKartierung[adresse_u];
-                    var type_ = eintrag_.type;
+                    var type_ = datenstruktur[eintrag_].type;
 
-                    int laenge;
+                    int wertInBytesLaenge;
 
                     if (type_ == Datentypen.String || type_ == Datentypen.Objekt)
                     {
-                        laenge = BitConverter.ToUInt16(buffer, pos_);
-                        pos_+=2;
+                        wertInBytesLaenge = BitConverter.ToUInt16(eingangPuffer, eingangPufferPosition);
+                        eingangPufferPosition+=2;
                     } else {
-                        laenge = datentypGroesse[type_];
+                        wertInBytesLaenge = datentypGroesse[type_];
                     }
 
-                    var tmp_bytes = new byte[laenge];
-                    Array.Copy(buffer, pos_, tmp_bytes, 0, laenge);
+                    //Was mache ich wenn die Länge mit 0 determiniert wird?
 
-                    while(change_lock) {}
+                    var tmp_bytes = new byte[wertInBytesLaenge];
+                    Array.Copy(eingangPuffer, eingangPufferPosition, tmp_bytes, 0, wertInBytesLaenge);
+
+                    while(sperrFlagAenderungen) { }
                     try
                     {
-                        aenderungen[eintrag_] = tmp_bytes;
+                        eingegangeneAenderungen[datenstruktur[eintrag_]] = tmp_bytes;
                     } catch {
 
                     }
-                    pos_+=laenge;
-                }
-
-                udpSock.BeginReceive(buffer, 0, buffer.Length, socketFlags:SocketFlags.None, udpCallback, udpSock); //muss ich den buffer wieder nullen?
+                    eingangPufferPosition+=wertInBytesLaenge;
+                }                
             } catch {
                 
+            } finally {
+                //eingangPuffer auf null setzen?
+                udpSock.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags:SocketFlags.None, UdpCallback, udpSock); //muss ich den buffer wieder nullen?
             }
         }
 
-        static List<IPEndPoint> targets = new List<IPEndPoint>();
-        static bool change_lock;
-        static Datenstruktur structure;
+        static readonly List<IPEndPoint> SendeZiele = [];
+        static bool sperrFlagAenderungen;
+        static Datenstruktur datenstruktur;
 
-        static IPAddress holeLokaleAdresse(string adapterName)
+        static IPAddress HoleLokaleAdresse(string adapterName)
         {
             var adapters = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
             var ips = Dns.GetHostAddresses(Dns.GetHostName());
@@ -110,9 +119,9 @@ namespace isci.integration
             return new IPAddress(0);
         }
 
-        static Dictionary<UInt64, Dateneintrag> adressKartierung = new Dictionary<UInt64, Dateneintrag>();
-        static Dictionary<Dateneintrag, UInt64> eintragKartierung = new Dictionary<Dateneintrag, UInt64>();
-        static readonly Dictionary<Datentypen, Int32> datentypGroesse = new Dictionary<Datentypen, Int32>()
+        static readonly Dictionary<UInt64, string> adressKartierung = [];
+        static readonly Dictionary<string, UInt64> eintragKartierung = [];
+        static readonly Dictionary<Datentypen, Int32> datentypGroesse = new ()
         {
             { Datentypen.Bool, sizeof(bool) },
             { Datentypen.UInt8, sizeof(byte) },
@@ -129,84 +138,80 @@ namespace isci.integration
         {
             var konfiguration = new Konfiguration(args);
 
-            var service = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024);
-            service.AddProperty("Ressource", konfiguration.Ressource);
-            service.AddProperty("Modul", "isci.integration");
-            service.AddProperty("Port", konfiguration.Port.ToString());
-            var sd = new ServiceDiscovery();
-            sd.Advertise(service);
+            eingangPuffer = new byte[konfiguration.eingangPufferGroesseInBytes];
 
-            structure = new Datenstruktur(konfiguration);
-            var ausfuehrungsmodell = new Ausführungsmodell(konfiguration, structure.Zustand);
+            var mdnsService = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024); //Port 1024? Hat des einen Wert?
+            mdnsService.AddProperty("Ressource", konfiguration.Ressource);
+            mdnsService.AddProperty("Modul", "isci.integration");
+            mdnsService.AddProperty("Port", konfiguration.Port.ToString());
+            var mdnsDiscovery = new ServiceDiscovery();
+            mdnsDiscovery.Advertise(mdnsService);
 
-            var beschreibung = new Modul(konfiguration.Identifikation, "isci.integration");
-            beschreibung.Name = "Integration Ressource " + konfiguration.Identifikation;
-            beschreibung.Beschreibung = "Modul zur Integration";
+            datenstruktur = new Datenstruktur(konfiguration);
+            var ausfuehrungsmodell = new Ausführungsmodell(konfiguration, datenstruktur.Zustand);
+
+            var beschreibung = new Modul(konfiguration.Identifikation, "isci.integration") {
+                Name = "Integration Ressource " + konfiguration.Identifikation,
+                Beschreibung = "Modul zur Integration"
+            };
             beschreibung.Speichern(konfiguration.OrdnerBeschreibungen + "/" + konfiguration.Identifikation + ".json");
 
-            var ip = holeLokaleAdresse(konfiguration.Adapter);
+            var ip = HoleLokaleAdresse(konfiguration.Adapter);
             while (ip.Equals(new IPAddress(0)))
             {
                 System.Threading.Thread.Sleep(5000);
-                ip = holeLokaleAdresse(konfiguration.Adapter);
+                ip = HoleLokaleAdresse(konfiguration.Adapter);
             }
             
             var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + "." + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.Ressource);
             schnittstelle.Speichern(konfiguration.OrdnerSchnittstellen + "/" + schnittstelle.Identifikation + ".json");
 
-            structure.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
+            datenstruktur.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
 
-            using (SHA256 sha256Hash = SHA256.Create())
+            foreach (var dateneintrag in datenstruktur.dateneinträge)
             {
-                foreach (var Dateneintrag in structure.dateneinträge)
-                {
-                    // ComputeHash - returns byte array
-                    byte[] bytes = sha256Hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(Dateneintrag.Key));
+                var id = dateneintrag.Value.Identifikation;
+                var bytes = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(id));
+                var idAlsHashAdresse = BitConverter.ToUInt64(bytes);
 
-                    // Convert byte array to a string
-                    UInt64 adr = 0;
-                    adr = BitConverter.ToUInt64(bytes);
-
-                    adressKartierung.Add(adr, Dateneintrag.Value);
-                    eintragKartierung.Add(Dateneintrag.Value, adr);
-                }
+                adressKartierung.Add(idAlsHashAdresse, id);
+                eintragKartierung.Add(id, idAlsHashAdresse);
             }
 
-            structure.Start();
+            datenstruktur.Start();
 
             for (int i = 0; i < konfiguration.Targets.Length; ++i)
             {
                 try
                 {
-                    var target_ = System.IO.File.ReadAllText(konfiguration.OrdnerSchnittstellen + "/" + konfiguration.Targets[i]);
+                    /*var target_ = System.IO.File.ReadAllText(konfiguration.OrdnerSchnittstellen + "/" + konfiguration.Targets[i]);
                     var schnittstelleTarget = Newtonsoft.Json.JsonConvert.DeserializeObject<SchnittstelleUdp>(target_);
-                    targets.Add(IPEndPoint.Parse(schnittstelleTarget.adresse));
+                    targets.Add(IPEndPoint.Parse(schnittstelleTarget.adresse));*/
+                    SendeZiele.Add(IPEndPoint.Parse(konfiguration.Targets[i]));
                 } catch {
 
                 }
             }
 
-            udpStart(ip, konfiguration.Port);
-            long curr_ticks = 0;
+            UdpStart(ip, konfiguration.Port);
 
-            byte[] puffer = new byte[1024];
-            int pos = 0;
-            
+            var ausgangPuffer = new byte[konfiguration.ausgangPufferGroesseInBytes];
+            int ausgangPufferPosition = 0;            
             
             while(true)
             {
-                structure.Zustand.WertAusSpeicherLesen();
+                datenstruktur.Zustand.WertAusSpeicherLesen();
 
                 if (ausfuehrungsmodell.AktuellerZustandModulAktivieren())
                 {
-                    var schritt_param = ausfuehrungsmodell.ParameterAktuellerZustand();
+                    var zustandParameter = ausfuehrungsmodell.ParameterAktuellerZustand();
                     
-                    switch (schritt_param)
+                    switch (zustandParameter)
                     {
                         case "E":
                         {
-                            change_lock = true;
-                            foreach (var aenderung in aenderungen)
+                            sperrFlagAenderungen = true;
+                            foreach (var aenderung in eingegangeneAenderungen)
                             {
                                 try {
                                     aenderung.Key.WertAusBytes(aenderung.Value);
@@ -215,64 +220,71 @@ namespace isci.integration
 
                                 }
                             }
-                            aenderungen.Clear();
-                            change_lock = false;
+                            eingegangeneAenderungen.Clear();
+                            sperrFlagAenderungen = false;
                             break;
-                        }                        
+                        }
                         case "A":
                         {
-                            var updated = structure.Lesen();
-                            updated.RemoveAll(item => structure.nichtVerteilen.Contains(item));
+                            var aktualisierteDateneintraege = datenstruktur.Lesen();
+                            aktualisierteDateneintraege.RemoveAll(item => datenstruktur.nichtVerteilen.Contains(item));
 
-                            foreach (var entry in updated)
+                            //updated.Add("Debuganwendung.Test.beispiel");
+
+                            foreach (var dateneintragId in aktualisierteDateneintraege)
                             {
-                                var eintrag_ = structure.dateneinträge[entry];
+                                var dateneintrag = datenstruktur[dateneintragId];
 
-                                var address_ = BitConverter.GetBytes(eintragKartierung[eintrag_]);
-                                byte[] value_ = null;
+                                var idAlsHashAdresse = BitConverter.GetBytes(eintragKartierung[dateneintragId]);
+                                byte[] dateneintragWertInBytes = null;
 
-                                var t = eintrag_.type;
+                                var dateneintragTyp = dateneintrag.type;
 
-                                switch (t)
+                                switch (dateneintragTyp)
                                 {
                                     case Datentypen.String: 
                                     case Datentypen.Objekt: {
-                                        var value_content = System.Text.Encoding.UTF8.GetBytes((String)eintrag_.WertSerialisieren());
-                                        var value_length = BitConverter.GetBytes((UInt16)value_content.Length); //auf zwei Bytes normieren!!! maximale länge dann 65535
-                                        var value_length_container = new byte[2];
-                                        Array.Copy(value_length, value_length_container, value_length_container.Length);
-                                        value_ = new byte[value_content.Length + value_length_container.Length];
-                                        Array.Copy(value_length_container, value_, length: value_length_container.Length);
-                                        Array.Copy(value_content, 0, value_, value_length_container.Length, value_content.Length);
+                                        var nachrichtInhalt = System.Text.Encoding.UTF8.GetBytes(dateneintrag.WertSerialisieren());
+                                        var nachrichtLaenge = BitConverter.GetBytes(nachrichtInhalt.Length); //auf zwei Bytes normieren!!! maximale länge dann 65535
+                                        var nachrichtLaengeNormiert = new byte[2];
+                                        Array.Copy(nachrichtLaenge, nachrichtLaengeNormiert, nachrichtLaengeNormiert.Length);
+                                        dateneintragWertInBytes = new byte[nachrichtInhalt.Length + nachrichtLaengeNormiert.Length];
+                                        Array.Copy(nachrichtLaengeNormiert, dateneintragWertInBytes, length: nachrichtLaengeNormiert.Length);
+                                        Array.Copy(nachrichtInhalt, 0, dateneintragWertInBytes, nachrichtLaengeNormiert.Length, nachrichtInhalt.Length);
                                         break;
                                     }
-                                    case Datentypen.Bool: value_ = BitConverter.GetBytes((bool)eintrag_.Wert); break;
+                                    case Datentypen.Bool:
+                                    dateneintragWertInBytes = BitConverter.GetBytes((bool)dateneintrag.Wert); break;
+                                    case Datentypen.Int16:
+                                    dateneintragWertInBytes = BitConverter.GetBytes((Int16)dateneintrag.Wert); break;
                                 }
 
-                                if (value_ != null)
+                                if (dateneintragWertInBytes != null)
                                 {
-                                    Array.Copy(address_, 0, puffer, pos, address_.Length);
-                                    pos+=address_.Length;
-                                    Array.Copy(value_, 0, puffer, pos, value_.Length);
-                                    pos+=value_.Length;
+                                    Array.Copy(idAlsHashAdresse, 0, ausgangPuffer, ausgangPufferPosition, idAlsHashAdresse.Length);
+                                    ausgangPufferPosition += idAlsHashAdresse.Length;
+                                    Array.Copy(dateneintragWertInBytes, 0, ausgangPuffer, ausgangPufferPosition, dateneintragWertInBytes.Length);
+                                    ausgangPufferPosition += dateneintragWertInBytes.Length;
                                 }
                             }
 
-                            if (pos > 0)
+                            if (ausgangPufferPosition > 0)
                             {
-                                foreach (var target in targets) {
-                                    udpSock.BeginSendTo(puffer, 0, pos, 0, target, null, null);
+                                foreach (var target in SendeZiele) {
+                                    udpSock.BeginSendTo(ausgangPuffer, 0, ausgangPufferPosition, 0, target, null, null);
                                 }
-                                Array.Clear(puffer, 0, pos);
-                                pos = 0;
+                                Array.Clear(ausgangPuffer, 0, ausgangPufferPosition);
+                                ausgangPufferPosition = 0;
                             }
                             break;
                         }
                     }
 
                     ausfuehrungsmodell.Folgezustand();
-                    structure.Zustand.WertInSpeicherSchreiben();
+                    datenstruktur.Zustand.WertInSpeicherSchreiben();
                 }
+
+                isci.Helfer.SleepForMicroseconds(konfiguration.PauseArbeitsschleifeUs);
             }
         }
     }
