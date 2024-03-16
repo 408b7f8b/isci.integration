@@ -27,8 +27,8 @@ namespace isci.integration
 
         public Konfiguration(string[] args) : base(args)
         {
-            if (eingangPufferGroesseInBytes <= 1024) eingangPufferGroesseInBytes = 1024;
-            if (ausgangPufferGroesseInBytes <= 1024) ausgangPufferGroesseInBytes = 1024;            
+            eingangPufferGroesseInBytes = Math.Max(eingangPufferGroesseInBytes, 1024);
+            ausgangPufferGroesseInBytes = Math.Max(ausgangPufferGroesseInBytes, 1024);         
         }
     }
 
@@ -127,9 +127,11 @@ namespace isci.integration
             { Datentypen.UInt8, sizeof(byte) },
             { Datentypen.UInt16, sizeof(ushort) },
             { Datentypen.UInt32, sizeof(uint) },
+            { Datentypen.UInt64, sizeof(ulong) },
             { Datentypen.Int8, sizeof(sbyte) },
             { Datentypen.Int16, sizeof(short) },
             { Datentypen.Int32, sizeof(int) },
+            { Datentypen.Int64, sizeof(long) },
             { Datentypen.Float, sizeof(float) },
             { Datentypen.Double, sizeof(double) }
         };
@@ -253,10 +255,17 @@ namespace isci.integration
                                         Array.Copy(nachrichtInhalt, 0, dateneintragWertInBytes, nachrichtLaengeNormiert.Length, nachrichtInhalt.Length);
                                         break;
                                     }
-                                    case Datentypen.Bool:
-                                    dateneintragWertInBytes = BitConverter.GetBytes((bool)dateneintrag.Wert); break;
-                                    case Datentypen.Int16:
-                                    dateneintragWertInBytes = BitConverter.GetBytes((Int16)dateneintrag.Wert); break;
+                                    case Datentypen.Bool: dateneintragWertInBytes = BitConverter.GetBytes((bool)dateneintrag.Wert); break;
+                                    case Datentypen.Int8: dateneintragWertInBytes = [(byte)(sbyte)dateneintrag.Wert]; break;
+                                    case Datentypen.Int16: dateneintragWertInBytes = BitConverter.GetBytes((Int16)dateneintrag.Wert); break;
+                                    case Datentypen.Int32: dateneintragWertInBytes = BitConverter.GetBytes((Int32)dateneintrag.Wert); break;
+                                    case Datentypen.Int64: dateneintragWertInBytes = BitConverter.GetBytes((Int64)dateneintrag.Wert); break;
+                                    case Datentypen.UInt8: dateneintragWertInBytes = [(byte)dateneintrag.Wert]; break;
+                                    case Datentypen.UInt16: dateneintragWertInBytes = BitConverter.GetBytes((UInt16)dateneintrag.Wert); break;
+                                    case Datentypen.UInt32: dateneintragWertInBytes = BitConverter.GetBytes((UInt32)dateneintrag.Wert); break;
+                                    case Datentypen.UInt64: dateneintragWertInBytes = BitConverter.GetBytes((UInt64)dateneintrag.Wert); break;
+                                    case Datentypen.Float: dateneintragWertInBytes = BitConverter.GetBytes((float)dateneintrag.Wert); break;
+                                    case Datentypen.Double: dateneintragWertInBytes = BitConverter.GetBytes((double)dateneintrag.Wert); break;
                                 }
 
                                 if (dateneintragWertInBytes != null)
