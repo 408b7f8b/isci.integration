@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0
 # Working directory anlegen, Dateien kopieren und Berechtigungen setzen
 WORKDIR /app
 COPY ./publish ./
-RUN chmod +x "./integration"
+RUN chmod +x "./isci.integration"
 
 # Umgebungsvariablen setzen
 ENV "ISCI_OrdnerAnwendungen"="/Anwendungen"
@@ -20,4 +20,4 @@ ENV "ISCI_OrdnerDatenstrukturen"="/Datenstrukturen"
 # Ports die durchgereicht werden müssen:
 # sendPort und receivePort also aktuell 5002 und 5003
 
-ENTRYPOINT ["./integration"]
+ENTRYPOINT ["./isci.integration"]
