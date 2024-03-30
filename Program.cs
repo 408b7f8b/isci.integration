@@ -8,41 +8,55 @@ using isci.Allgemein;
 using isci.Daten;
 using isci.Beschreibung;
 using Makaretu.Dns;
-using System.Reflection.Metadata;
 
 namespace isci.integration
 {
-    public class Konfiguration : isci.Allgemein.Parameter
+    public class Konfiguration : Parameter
     {
-        [fromArgs, fromEnv]
+        [fromEnv, fromArgs]
         public string[] Targets;
-        [fromArgs, fromEnv]
+
+        [fromEnv, fromArgs]
         public string Adapter;
-        [fromArgs, fromEnv]
-        public int Port;
+
+        [fromEnv, fromArgs]
+        public int sendPort;
+
+        [fromEnv, fromArgs]
+        public int receivePort;
+
         [fromArgs, fromEnv]
         public int eingangPufferGroesseInBytes;
+
         [fromArgs, fromEnv]
         public int ausgangPufferGroesseInBytes;
 
+        [fromArgs, fromEnv]
+        public int warteZeit;
+
         public Konfiguration(string[] args) : base(args)
         {
-            eingangPufferGroesseInBytes = Math.Max(eingangPufferGroesseInBytes, 1024);
-            ausgangPufferGroesseInBytes = Math.Max(ausgangPufferGroesseInBytes, 1024);         
+            if (eingangPufferGroesseInBytes <= 1024) eingangPufferGroesseInBytes = 1024;
+            if (ausgangPufferGroesseInBytes <= 1024) ausgangPufferGroesseInBytes = 1024;
         }
     }
 
     class Program
     {
-        static Socket udpSock;
+        static Socket sendSocket;
+        static Socket receiveSocket;
         static byte[] eingangPuffer;
         static readonly Dictionary<Dateneintrag, byte[]> eingegangeneAenderungen = [];
 
-        static void UdpStart(IPAddress ip, int port){
-            udpSock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            udpSock.Bind(new IPEndPoint(ip, port));
-            udpSock.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags:SocketFlags.None, UdpCallback, udpSock);
-        }       
+        static void UdpStart(IPAddress ip, int sendPort, int receivePort)
+        {
+            sendSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            sendSocket.Bind(new IPEndPoint(ip, sendPort));
+
+            receiveSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            receiveSocket.Bind(new IPEndPoint(ip, receivePort));
+            receiveSocket.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags: SocketFlags.None, UdpCallback, receiveSocket);
+        }
 
         static void UdpCallback(IAsyncResult asyncResult){
             try
@@ -89,12 +103,23 @@ namespace isci.integration
 
                     }
                     eingangPufferPosition+=wertInBytesLaenge;
-                }                
-            } catch {
-                
-            } finally {
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.GetBaseException().GetType() != typeof(KeyNotFoundException))
+                {
+                    Logger.Fehler("Ausnahme bei Datenempfang: die gesendete Variable ist auf diesem System nicht bekannt. Konfiguration der Datenmodelle überprüfen.");
+                }
+                else
+                {
+                    Logger.Fehler("Ausnahme bei Datenempfang: " + ex.Message + ", " + ex.StackTrace);
+                }
+            }
+            finally
+            {
                 //eingangPuffer auf null setzen?
-                udpSock.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags:SocketFlags.None, UdpCallback, udpSock); //muss ich den buffer wieder nullen?
+                receiveSocket.BeginReceive(eingangPuffer, 0, eingangPuffer.Length, socketFlags: SocketFlags.None, UdpCallback, receiveSocket); //muss ich den buffer wieder nullen?
             }
         }
 
@@ -142,13 +167,13 @@ namespace isci.integration
 
             eingangPuffer = new byte[konfiguration.eingangPufferGroesseInBytes];
 
-            var mdnsService = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024); //Port 1024? Hat des einen Wert?
+            /* var mdnsService = new ServiceProfile(konfiguration.Anwendung, konfiguration.Identifikation + ".isci", 1024); //Port 1024? Hat des einen Wert?
             mdnsService.AddProperty("Ressource", konfiguration.Ressource);
             mdnsService.AddProperty("Modul", "isci.integration");
             mdnsService.AddProperty("Port", konfiguration.Port.ToString());
             var mdnsDiscovery = new ServiceDiscovery();
             mdnsDiscovery.Advertise(mdnsService);
-
+ */
             datenstruktur = new Datenstruktur(konfiguration);
             var ausfuehrungsmodell = new Ausführungsmodell(konfiguration, datenstruktur.Zustand);
 
@@ -164,8 +189,8 @@ namespace isci.integration
                 System.Threading.Thread.Sleep(5000);
                 ip = HoleLokaleAdresse(konfiguration.Adapter);
             }
-            
-            var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + "." + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.Ressource);
+
+            var schnittstelle = new SchnittstelleUdp(konfiguration.Ressource + "." + konfiguration.Anwendung + "." + konfiguration.Identifikation, ip.ToString(), konfiguration.sendPort, konfiguration.receivePort, konfiguration.Ressource);
             schnittstelle.Speichern(konfiguration.OrdnerSchnittstellen + "/" + schnittstelle.Identifikation + ".json");
 
             datenstruktur.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
@@ -186,16 +211,20 @@ namespace isci.integration
             {
                 try
                 {
-                    /*var target_ = System.IO.File.ReadAllText(konfiguration.OrdnerSchnittstellen + "/" + konfiguration.Targets[i]);
+                    var target_ = System.IO.File.ReadAllText(konfiguration.OrdnerSchnittstellen + "/" + konfiguration.Targets[i]);
                     var schnittstelleTarget = Newtonsoft.Json.JsonConvert.DeserializeObject<SchnittstelleUdp>(target_);
-                    targets.Add(IPEndPoint.Parse(schnittstelleTarget.adresse));*/
-                    SendeZiele.Add(IPEndPoint.Parse(konfiguration.Targets[i]));
-                } catch {
-
+                    IPEndPoint endPoint = IPEndPoint.Parse(schnittstelleTarget.adresse);
+                    endPoint.Port = schnittstelleTarget.receivePort;
+                    SendeZiele.Add(endPoint);
+                    //SendeZiele.Add(IPEndPoint.Parse(konfiguration.Targets[i]));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Fehler("Ausnahme bei der Initialisierung der Sendeziele: " + ex.Message + ". " + konfiguration.OrdnerSchnittstellen + "/" + konfiguration.Targets[i] + " konnte nicht geladen werden.");
                 }
             }
 
-            UdpStart(ip, konfiguration.Port);
+            UdpStart(ip, konfiguration.sendPort, konfiguration.receivePort);
 
             var ausgangPuffer = new byte[konfiguration.ausgangPufferGroesseInBytes];
             int ausgangPufferPosition = 0;            
@@ -279,12 +308,15 @@ namespace isci.integration
 
                             if (ausgangPufferPosition > 0)
                             {
-                                foreach (var target in SendeZiele) {
-                                    udpSock.BeginSendTo(ausgangPuffer, 0, ausgangPufferPosition, 0, target, null, null);
+                                foreach (var target in SendeZiele)
+                                {
+                                    //Console.WriteLine("Sende an " + target);
+                                    sendSocket.BeginSendTo(ausgangPuffer, 0, ausgangPufferPosition, 0, target, null, null);
                                 }
                                 Array.Clear(ausgangPuffer, 0, ausgangPufferPosition);
                                 ausgangPufferPosition = 0;
                             }
+                            
                             break;
                         }
                     }
